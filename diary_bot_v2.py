@@ -138,6 +138,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "last_message_id": None,
             "last_summary_date": None,
             "itog_state": None,
+            "last_bot_message_id": None,
+            "last_bot_message_chat_id": None,
         }
     else:
         users[user_id].setdefault("timezone", DEFAULT_TIMEZONE)
@@ -147,6 +149,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         users[user_id].setdefault("last_message_id", None)
         users[user_id].setdefault("last_summary_date", None)
         users[user_id].setdefault("itog_state", None)
+        users[user_id].setdefault("last_bot_message_id", None)
+        users[user_id].setdefault("last_bot_message_chat_id", None)
     
     save_users(users)
     user = users[user_id]
@@ -166,7 +170,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
     
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    await send_and_replace(update, users, welcome_text, reply_markup)
     await ensure_notification_time(update, context, user)
     return MAIN_MENU
 
@@ -187,16 +191,20 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 users[user_id]["timezone"] = tz
                 save_users(users)
             context.user_data["choosing_timezone"] = False
-            await update.message.reply_text(
+            await send_and_replace(
+                update,
+                users,
                 f"✅ Часовой пояс обновлён: {tz} ({get_timezone_offset_label(tz)}).",
-                reply_markup=ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True),
+                ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True),
             )
             return MAIN_MENU
         buttons = [[zone] for zone in TIMEZONES]
         reply_markup = ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=True)
-        await update.message.reply_text(
+        await send_and_replace(
+            update,
+            users,
             "❌ Не узнал этот часовой пояс. Выбери вариант с клавиатуры:",
-            reply_markup=reply_markup,
+            reply_markup,
         )
         return MAIN_MENU
     
@@ -205,13 +213,13 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     elif update.message.text == "🌍 Глобальные планы":
         return await global_plans_menu(update, context)
     elif update.message.text == "Мои планы":
-        await show_weekly_plans(update, user)
+        await show_weekly_plans(update, user, users)
         return MAIN_MENU
     elif update.message.text == "🌐 Часовой пояс":
         return await timezone_command(update, context)
     
     reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
-    await update.message.reply_text("Выбери, чем займёмся дальше:", reply_markup=reply_markup)
+    await send_and_replace(update, users, "Выбери, чем займёмся дальше:", reply_markup)
     return MAIN_MENU
 
 async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -227,18 +235,18 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = users.get(user_id)
     
     if not user:
-        await update.message.reply_text("Сначала нажми /start — так мы успеем познакомиться 😉")
+        await send_and_replace(update, users, "Сначала нажми /start — так мы успеем познакомиться 😉")
         return
     
     if not context.args:
-        await update.message.reply_text("Напиши дату в формате ДД.ММ.ГГГГ, например /day 12.05.2025")
+        await send_and_replace(update, users, "Напиши дату в формате ДД.ММ.ГГГГ, например /day 12.05.2025")
         return
     
     date_text = context.args[0]
     try:
         target_date = datetime.strptime(date_text, "%d.%m.%Y")
     except ValueError:
-        await update.message.reply_text("❌ Хочется видеть дату вроде 12.05.2025 — попробуй ещё раз 🙂")
+        await send_and_replace(update, users, "❌ Хочется видеть дату вроде 12.05.2025 — попробуй ещё раз 🙂")
         return
     
     day_name = DAYS_OF_WEEK[target_date.weekday()]
@@ -261,7 +269,7 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_parts.append("🌍 Глобальные ориентиры:")
         message_parts.extend([f"• {plan}" for plan in global_plans])
     
-    await update.message.reply_text("\n".join(message_parts))
+    await send_and_replace(update, users, "\n".join(message_parts))
 
 def format_weekly_plans_text(user: dict) -> str:
     """Сформировать текст плана на неделю"""
@@ -296,14 +304,14 @@ def format_plan_line(plan) -> str:
         return text
     return str(plan)
 
-async def show_weekly_plans(update: Update, user: dict):
+async def show_weekly_plans(update: Update, user: dict, users: dict):
     """Отправить пользователю планы на неделю"""
     if not user:
-        await update.message.reply_text("Сначала запусти /start — так я узнаю твои планы 😉")
+        await send_and_replace(update, users, "Сначала запусти /start — так я узнаю твои планы 😉")
         return
     
     text = format_weekly_plans_text(user)
-    await update.message.reply_text(text)
+    await send_and_replace(update, users, text)
 
 def build_itog_list_text(day_name: str, date_text: str, plans: list, completed: set[int]) -> str:
     """Сформировать текст для списка планов при итогах"""
@@ -331,6 +339,39 @@ async def delete_message_safe(bot, chat_id: str, message_id: Optional[int]):
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
     except Exception as error:
         logger.debug(f"Не удалось удалить сообщение {message_id} в чате {chat_id}: {error}")
+
+async def send_and_replace(
+    update: Update,
+    users: dict,
+    text: str,
+    reply_markup: ReplyKeyboardMarkup | ReplyKeyboardRemove | None = None,
+):
+    """Отправить новое сообщение и удалить предыдущее сообщение бота для пользователя."""
+    message = getattr(update, "message", None)
+    chat = update.effective_chat
+    user_id = str(update.effective_user.id)
+    user = users.get(user_id, {})
+
+    last_id = user.get("last_bot_message_id")
+    last_chat = user.get("last_bot_message_chat_id")
+    if last_id and last_chat:
+        try:
+            await update.get_bot().delete_message(chat_id=last_chat, message_id=last_id)
+        except Exception as error:
+            logger.debug(f"Не удалось удалить прошлое сообщение бота {last_id}: {error}")
+
+    if message:
+        msg = await message.reply_text(text, reply_markup=reply_markup)
+    elif chat:
+        msg = await chat.send_message(text, reply_markup=reply_markup)
+    else:
+        return None
+
+    user["last_bot_message_id"] = msg.message_id
+    user["last_bot_message_chat_id"] = msg.chat_id
+    users[user_id] = user
+    save_users(users)
+    return msg
 
 async def send_itog_question(bot, chat_id: str, plan_text: str, index: int) -> int:
     """Отправить вопрос по конкретному пункту плана"""
@@ -388,7 +429,7 @@ async def start_itog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = users.get(user_id)
     
     if not user:
-        await update.message.reply_text("Сначала запусти /start, чтобы я знал о тебе 😉")
+        await send_and_replace(update, users, "Сначала запусти /start, чтобы я знал о тебе 😉")
         return MAIN_MENU
     
     today = get_user_now(user)
@@ -397,7 +438,7 @@ async def start_itog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     date_text = today.strftime("%d.%m.%Y")
     
     if not today_plans:
-        await update.message.reply_text("Похоже, на сегодня записей нет. Добавь их командой /plan, и я вернусь к итогам позже.")
+        await send_and_replace(update, users, "Похоже, на сегодня записей нет. Добавь их командой /plan, и я вернусь к итогам позже.")
         return MAIN_MENU
     
     if user.get("itog_state"):
@@ -428,7 +469,7 @@ async def handle_itog_response(update: Update, context: ContextTypes.DEFAULT_TYP
     user = users.get(user_id)
     
     if not user or not user.get("itog_state"):
-        await update.message.reply_text("Сейчас итоги не активны. Нажми /itog, чтобы начать заново.")
+        await send_and_replace(update, users, "Сейчас итоги не активны. Нажми /itog, чтобы начать заново.")
         return MAIN_MENU
     
     state = user["itog_state"]
@@ -438,7 +479,7 @@ async def handle_itog_response(update: Update, context: ContextTypes.DEFAULT_TYP
         user["itog_state"] = None
         users[user_id] = user
         save_users(users)
-        await update.message.reply_text("Похоже, планов нет. Возвращаю в меню.")
+        await send_and_replace(update, users, "Похоже, планов нет. Возвращаю в меню.")
         return MAIN_MENU
     
     current_index = state.get("current_index", 0)
@@ -449,9 +490,9 @@ async def handle_itog_response(update: Update, context: ContextTypes.DEFAULT_TYP
         users[user_id] = user
         save_users(users)
         reply_markup = ReplyKeyboardRemove()
-        await update.message.reply_text("Все пункты уже разобрали 🙌", reply_markup=reply_markup)
+        await send_and_replace(update, users, "Все пункты уже разобрали 🙌", reply_markup)
         menu_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
-        await update.message.reply_text("Чем займёмся дальше?", reply_markup=menu_markup)
+        await send_and_replace(update, users, "Чем займёмся дальше?", menu_markup)
         return MAIN_MENU
     
     answer = update.message.text.strip().lower()
@@ -474,12 +515,14 @@ async def handle_itog_response(update: Update, context: ContextTypes.DEFAULT_TYP
         completed_count = len(state.get("completed", []))
         total = len(plans)
         reply_markup = ReplyKeyboardRemove()
-        await update.message.reply_text(
+        await send_and_replace(
+            update,
+            users,
             f"✅ Готово! Выполнено {completed_count} из {total}. Горжусь твоим прогрессом.",
-            reply_markup=reply_markup
+            reply_markup,
         )
         menu_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
-        await update.message.reply_text("Верну тебя в главное меню:", reply_markup=menu_markup)
+        await send_and_replace(update, users, "Верну тебя в главное меню:", menu_markup)
         return MAIN_MENU
     
     next_index = state["current_index"]
@@ -498,6 +541,7 @@ async def handle_itog_response(update: Update, context: ContextTypes.DEFAULT_TYP
 async def setup_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начало настройки планов"""
     user_id = str(update.effective_user.id)
+    users = load_users()
     context.user_data['setup_day'] = 0
     context.user_data['action'] = 'replace'
     context.user_data['deleting_day'] = False
@@ -507,9 +551,11 @@ async def setup_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     keyboard.append(["🗑️ Удалить планы на день"])
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     
-    await update.message.reply_text(
+    await send_and_replace(
+        update,
+        users,
         "📅 С какого дня начнём? Можно отметить только те дни, которые сейчас важны. Остальные успеем позже ✨",
-        reply_markup=reply_markup
+        reply_markup
     )
     return CHOOSING_DAY
 
@@ -526,9 +572,11 @@ async def choose_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         save_users(users)
         
         reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
-        await update.message.reply_text(
+        await send_and_replace(
+            update,
+            users,
             "👌 Оставляем всё, как есть. Если понадобится — вернись ко мне /plan.\n\nГлавное меню:",
-            reply_markup=reply_markup
+            reply_markup
         )
         await ensure_notification_time(update, context, users[user_id])
         return MAIN_MENU
@@ -537,9 +585,11 @@ async def choose_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         users[user_id]['setup_complete'] = True
         save_users(users)
         reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
-        await update.message.reply_text(
+        await send_and_replace(
+            update,
+            users,
             "✅ Отлично! Планы сохранены. Возвращаю в меню.",
-            reply_markup=reply_markup
+            reply_markup
         )
         await ensure_notification_time(update, context, users[user_id])
         return MAIN_MENU
@@ -547,9 +597,11 @@ async def choose_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if text == "🗑️ Удалить планы на день":
         keyboard = [[day] for day in DAYS_SHORT]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-        await update.message.reply_text(
+        await send_and_replace(
+            update,
+            users,
             "Выбери день, у которого нужно полностью удалить планы:",
-            reply_markup=reply_markup,
+            reply_markup,
         )
         context.user_data["deleting_day"] = True
         return CHOOSING_DAY
@@ -562,16 +614,18 @@ async def choose_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 day_index = i
                 break
         if day_index is None:
-            await update.message.reply_text("❌ Выбери день недели с клавиатуры.")
+            await send_and_replace(update, users, "❌ Выбери день недели с клавиатуры.")
             return CHOOSING_DAY
         day_name = DAYS_OF_WEEK[day_index]
         users[user_id]['plans'][day_name] = []
         save_users(users)
         context.user_data["deleting_day"] = False
         reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
-        await update.message.reply_text(
+        await send_and_replace(
+            update,
+            users,
             f"🗑️ Все планы на {day_name} удалены.",
-            reply_markup=reply_markup,
+            reply_markup,
         )
         return MAIN_MENU
     
@@ -583,7 +637,7 @@ async def choose_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             break
     
     if day_index is None:
-        await update.message.reply_text("❌ Выбери, пожалуйста, день из списка на клавиатуре.")
+        await send_and_replace(update, users, "❌ Выбери, пожалуйста, день из списка на клавиатуре.")
         return CHOOSING_DAY
     
     context.user_data['current_day'] = DAYS_OF_WEEK[day_index]
@@ -593,10 +647,12 @@ async def choose_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = [["⏭️ Пропустить день"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     
-    await update.message.reply_text(
+    await send_and_replace(
+        update,
+        users,
         f"📝 {DAYS_OF_WEEK[day_index]}\n\nПеречисли планы через точку с запятой (;).\n"
         "Пример: сходить погулять; купить молоко; позвонить другу",
-        reply_markup=reply_markup
+        reply_markup
     )
     return ENTERING_PLANS
 
@@ -610,7 +666,7 @@ async def enter_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     # Отмена
     if text == "❌ Отмена":
         reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
-        await update.message.reply_text("Окей, отменяем. Вот меню:", reply_markup=reply_markup)
+        await send_and_replace(update, users, "Окей, отменяем. Вот меню:", reply_markup)
         return MAIN_MENU
     
     # Пропуск дня
@@ -676,7 +732,7 @@ async def review_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     
-    await update.message.reply_text(review_message, reply_markup=reply_markup)
+    await send_and_replace(update, users, review_message, reply_markup)
     return REVIEW_PLANS
 
 async def handle_review_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -689,9 +745,11 @@ async def handle_review_action(update: Update, context: ContextTypes.DEFAULT_TYP
     if text == "➕ Дополнить":
         keyboard = [["❌ Отмена"]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-        await update.message.reply_text(
+        await send_and_replace(
+            update,
+            users,
             "Добавь пункты через точку с запятой. Я просто допишу их к текущему списку:",
-            reply_markup=reply_markup
+            reply_markup
         )
         context.user_data['action'] = 'supplement'
         return ENTERING_PLANS
@@ -699,9 +757,11 @@ async def handle_review_action(update: Update, context: ContextTypes.DEFAULT_TYP
     elif text == "✏️ Изменить":
         keyboard = [["❌ Отмена"]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-        await update.message.reply_text(
+        await send_and_replace(
+            update,
+            users,
             "Введи планы заново (используй точку с запятой между пунктами):",
-            reply_markup=reply_markup
+            reply_markup
         )
         context.user_data['action'] = 'replace'
         return ENTERING_PLANS
@@ -728,10 +788,12 @@ async def handle_review_action(update: Update, context: ContextTypes.DEFAULT_TYP
         keyboard.append(["✅ Готово"])
         keyboard.append(["🗑️ Удалить планы на день"])
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-        await update.message.reply_text(
+        await send_and_replace(
+            update,
+            users,
             f"✨ {current_day} готов. Можно выбрать следующий день, нажать «✅ Готово» "
             "или «🗑️ Удалить планы на день».",
-            reply_markup=reply_markup
+            reply_markup
         )
         return CHOOSING_DAY
     
@@ -762,21 +824,25 @@ async def handle_time_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
             tz_name = get_user_timezone(users[user_id])
             
-            await update.message.reply_text(
+            await send_and_replace(
+                update,
+                users,
                 f"✅ Отлично! Теперь я буду писать в {users[user_id]['notification_time']} "
                 f"({get_timezone_offset_label(tz_name)}).\n\nЧем займёмся дальше?",
-                reply_markup=reply_markup
+                reply_markup
             )
             return MAIN_MENU
         
         except (ValueError, IndexError):
-            await update.message.reply_text(
+            await send_and_replace(
+                update,
+                users,
                 "❌ Не получилось прочитать время. Нужен формат ЧЧ:ММ, например 09:00."
             )
             return MAIN_MENU
     
     reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
-    await update.message.reply_text("Главное меню:", reply_markup=reply_markup)
+    await send_and_replace(update, users, "Главное меню:", reply_markup)
     return MAIN_MENU
 
 TIMEZONES = [
@@ -796,15 +862,17 @@ async def timezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = users.get(user_id)
     
     if not user:
-        await update.message.reply_text("Сначала запусти /start 😉")
+        await send_and_replace(update, users, "Сначала запусти /start 😉")
         return MAIN_MENU
     
     buttons = [[tz] for tz in TIMEZONES]
     reply_markup = ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=True)
     
-    await update.message.reply_text(
+    await send_and_replace(
+        update,
+        users,
         "Выбери свой часовой пояс (по названию региона):",
-        reply_markup=reply_markup,
+        reply_markup,
     )
     context.user_data["choosing_timezone"] = True
     return MAIN_MENU
@@ -814,6 +882,7 @@ async def timezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def global_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Меню глобальных планов"""
     user_id = str(update.effective_user.id)
+    users = load_users()
     global_plans = load_global_plans()
     user_plans = global_plans.get(user_id, [])
     
@@ -829,9 +898,11 @@ async def global_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     
-    await update.message.reply_text(
+    await send_and_replace(
+        update,
+        users,
         message + "\n\nВыбери действие:",
-        reply_markup=reply_markup
+        reply_markup
     )
     return GLOBAL_MENU
 
@@ -840,19 +911,24 @@ async def handle_global_action(update: Update, context: ContextTypes.DEFAULT_TYP
     await cleanup_user_message(update)
     text = update.message.text.strip()
     user_id = str(update.effective_user.id)
+    users = load_users()
     
     if text == "➕ Добавить":
-        await update.message.reply_text(
+        await send_and_replace(
+            update,
+            users,
             "Перечисли глобальные планы через точку с запятой — я добавлю их к списку:",
-            reply_markup=ReplyKeyboardRemove()
+            ReplyKeyboardRemove()
         )
         context.user_data['global_action'] = 'add'
         return ENTERING_GLOBAL_PLANS
     
     elif text == "✏️ Редактировать":
-        await update.message.reply_text(
+        await send_and_replace(
+            update,
+            users,
             "Напиши глобальные планы заново (они заменят предыдущие):",
-            reply_markup=ReplyKeyboardRemove()
+            ReplyKeyboardRemove()
         )
         context.user_data['global_action'] = 'replace'
         return ENTERING_GLOBAL_PLANS
@@ -862,17 +938,17 @@ async def handle_global_action(update: Update, context: ContextTypes.DEFAULT_TYP
         if user_id in global_plans:
             del global_plans[user_id]
             save_global_plans(global_plans)
-            await update.message.reply_text("✅ Глобальные планы очищены. Можно начать с чистого листа!")
+            await send_and_replace(update, users, "✅ Глобальные планы очищены. Можно начать с чистого листа!")
         else:
-            await update.message.reply_text("❌ Пока нечего удалять — список пуст.")
+            await send_and_replace(update, users, "❌ Пока нечего удалять — список пуст.")
         
         reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
-        await update.message.reply_text("Возвращаю в главное меню:", reply_markup=reply_markup)
+        await send_and_replace(update, users, "Возвращаю в главное меню:", reply_markup)
         return MAIN_MENU
     
     elif text == "⬅️ Назад":
         reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
-        await update.message.reply_text("Главное меню открыто:", reply_markup=reply_markup)
+        await send_and_replace(update, users, "Главное меню открыто:", reply_markup)
         return MAIN_MENU
     
     return GLOBAL_MENU
@@ -881,6 +957,7 @@ async def enter_global_plans(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Ввод глобальных планов"""
     await cleanup_user_message(update)
     user_id = str(update.effective_user.id)
+    users = load_users()
     global_plans = load_global_plans()
     text = update.message.text.strip()
     
@@ -898,17 +975,20 @@ async def enter_global_plans(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
     
-    await update.message.reply_text(
+    await send_and_replace(
+        update,
+        users,
         "✅ Глобальные планы обновлены! Возвращаю тебя в меню.",
-        reply_markup=reply_markup
+        reply_markup
     )
     return MAIN_MENU
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отмена текущей операции"""
     await cleanup_user_message(update)
+    users = load_users()
     reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
-    await update.message.reply_text("Операцию отменил. Вот меню:", reply_markup=reply_markup)
+    await send_and_replace(update, users, "Операцию отменил. Вот меню:", reply_markup)
     return MAIN_MENU
 
 # ========== ОТПРАВКА УВЕДОМЛЕНИЙ ==========
