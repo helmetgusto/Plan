@@ -56,7 +56,7 @@ def get_timezone_offset_label(tz_name: str) -> str:
 
 def get_user_timezone(user: dict) -> str:
     """Вернуть часовой пояс пользователя (по умолчанию Иркутск)"""
-    return DEFAULT_TIMEZONE
+    return user.get("timezone", DEFAULT_TIMEZONE)
 
 def get_user_now(user: dict) -> datetime:
     """Текущее время пользователя"""
@@ -180,6 +180,26 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if context.user_data.get('waiting_for_time'):
         return await handle_time_input(update, context)
     
+    if context.user_data.get("choosing_timezone"):
+        tz = update.message.text.strip()
+        if tz in TIMEZONES:
+            if user_id in users:
+                users[user_id]["timezone"] = tz
+                save_users(users)
+            context.user_data["choosing_timezone"] = False
+            await update.message.reply_text(
+                f"✅ Часовой пояс обновлён: {tz} ({get_timezone_offset_label(tz)}).",
+                reply_markup=ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True),
+            )
+            return MAIN_MENU
+        buttons = [[zone] for zone in TIMEZONES]
+        reply_markup = ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=True)
+        await update.message.reply_text(
+            "❌ Не узнал этот часовой пояс. Выбери вариант с клавиатуры:",
+            reply_markup=reply_markup,
+        )
+        return MAIN_MENU
+    
     if update.message.text == "📋 Настроить планы":
         return await setup_plans(update, context)
     elif update.message.text == "🌍 Глобальные планы":
@@ -230,7 +250,7 @@ async def day_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if day_plans:
         message_parts.append("📋 План на день:")
-        message_parts.extend([f"• {plan}" for plan in day_plans])
+        message_parts.extend([f"• {format_plan_line(plan)}" for plan in day_plans])
     else:
         message_parts.append("📋 Пока ничего не записано — можно заполнить через /plan.")
     
@@ -250,7 +270,7 @@ def format_weekly_plans_text(user: dict) -> str:
         day_plans = plans.get(day, [])
         if day_plans:
             lines.append(f"{day}:")
-            lines.append("\n".join([f"   • {plan}" for plan in day_plans]))
+            lines.append("\n".join([f"   • {format_plan_line(p)}" for p in day_plans]))
         else:
             lines.append(f"{day}: — отдых или спонтанность")
         lines.append("")
@@ -265,6 +285,15 @@ def escape_html(text: str) -> str:
         .replace(">", "&gt;")
     )
 
+def format_plan_line(plan) -> str:
+    """Вернуть строку для отображения плана (с учётом времени)"""
+    if isinstance(plan, dict):
+        text = plan.get("text", "")
+        if plan.get("time"):
+            return f"{plan['time']} — {text}"
+        return text
+    return str(plan)
+
 async def show_weekly_plans(update: Update, user: dict):
     """Отправить пользователю планы на неделю"""
     if not user:
@@ -274,7 +303,7 @@ async def show_weekly_plans(update: Update, user: dict):
     text = format_weekly_plans_text(user)
     await update.message.reply_text(text)
 
-def build_itog_list_text(day_name: str, date_text: str, plans: list[str], completed: set[int]) -> str:
+def build_itog_list_text(day_name: str, date_text: str, plans: list, completed: set[int]) -> str:
     """Сформировать текст для списка планов при итогах"""
     lines = [f"📘 Итоговый чек-лист: {date_text} • {day_name}", ""]
     
@@ -282,7 +311,7 @@ def build_itog_list_text(day_name: str, date_text: str, plans: list[str], comple
         lines.append("На сегодня планов нет.")
     else:
         for idx, plan in enumerate(plans):
-            plan_text = escape_html(plan)
+            plan_text = escape_html(format_plan_line(plan))
             if idx in completed:
                 plan_text = f"<s>{plan_text}</s>"
             lines.append(f"{idx + 1}. {plan_text}")
@@ -374,7 +403,7 @@ async def start_itog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     list_text = build_itog_list_text(day_name, date_text, today_plans, set())
     list_msg = await update.message.reply_text(list_text, parse_mode='HTML')
-    question_id = await send_itog_question(context.bot, user_id, today_plans[0], 0)
+    question_id = await send_itog_question(context.bot, user_id, format_plan_line(today_plans[0]), 0)
     
     user['itog_state'] = {
         "date": date_text,
@@ -452,7 +481,12 @@ async def handle_itog_response(update: Update, context: ContextTypes.DEFAULT_TYP
         return MAIN_MENU
     
     next_index = state["current_index"]
-    next_question_id = await send_itog_question(context.bot, user_id, plans[next_index], next_index)
+    next_question_id = await send_itog_question(
+        context.bot,
+        user_id,
+        format_plan_line(plans[next_index]),
+        next_index
+    )
     state["question_message_id"] = next_question_id
     user["itog_state"] = state
     users[user_id] = user
@@ -464,9 +498,11 @@ async def setup_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     user_id = str(update.effective_user.id)
     context.user_data['setup_day'] = 0
     context.user_data['action'] = 'replace'
+    context.user_data['deleting_day'] = False
     
     keyboard = [[day] for day in DAYS_SHORT]
     keyboard.append(["⏭️ Пропустить все"])
+    keyboard.append(["🗑️ Удалить планы на день"])
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     
     await update.message.reply_text(
@@ -504,6 +540,37 @@ async def choose_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             reply_markup=reply_markup
         )
         await ensure_notification_time(update, context, users[user_id])
+        return MAIN_MENU
+    
+    if text == "🗑️ Удалить планы на день":
+        keyboard = [[day] for day in DAYS_SHORT]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        await update.message.reply_text(
+            "Выбери день, у которого нужно полностью удалить планы:",
+            reply_markup=reply_markup,
+        )
+        context.user_data["deleting_day"] = True
+        return CHOOSING_DAY
+    
+    # Режим удаления планов
+    if context.user_data.get("deleting_day"):
+        day_index = None
+        for i, day_short in enumerate(DAYS_SHORT):
+            if text == day_short:
+                day_index = i
+                break
+        if day_index is None:
+            await update.message.reply_text("❌ Выбери день недели с клавиатуры.")
+            return CHOOSING_DAY
+        day_name = DAYS_OF_WEEK[day_index]
+        users[user_id]['plans'][day_name] = []
+        save_users(users)
+        context.user_data["deleting_day"] = False
+        reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
+        await update.message.reply_text(
+            f"🗑️ Все планы на {day_name} удалены.",
+            reply_markup=reply_markup,
+        )
         return MAIN_MENU
     
     # Найти день по короткому названию
@@ -549,8 +616,25 @@ async def enter_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         context.user_data['current_plans'] = None
         context.user_data['skip_day'] = True
     else:
-        # Парсим планы
-        plans = [plan.strip() for plan in text.split(';') if plan.strip()]
+        # Парсим планы: "08:00 сделать зарядку; позвонить другу"
+        raw_items = [item.strip() for item in text.split(';') if item.strip()]
+        plans = []
+        for item in raw_items:
+            parts = item.split(maxsplit=1)
+            if (
+                len(parts) == 2
+                and len(parts[0]) == 5
+                and parts[0][2] == ':'
+                and parts[0][:2].isdigit()
+                and parts[0][3:].isdigit()
+            ):
+                hh = int(parts[0][:2])
+                mm = int(parts[0][3:])
+                if 0 <= hh <= 23 and 0 <= mm <= 59:
+                    plans.append({"time": parts[0], "text": parts[1]})
+                    continue
+            # без времени
+            plans.append({"time": None, "text": item})
         context.user_data['current_plans'] = plans
         context.user_data['skip_day'] = False
     
@@ -569,12 +653,12 @@ async def review_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if skip_day:
         existing_plans = users[user_id]['plans'].get(current_day, [])
         if existing_plans:
-            plans_text = "\n".join([f"{i+1}. {plan}" for i, plan in enumerate(existing_plans)])
+            plans_text = "\n".join([f"{i+1}. {format_plan_line(plan)}" for i, plan in enumerate(existing_plans)])
             plans_text = "Оставляем без изменений:\n" + plans_text
         else:
             plans_text = "Этот день пока останется свободным."
     elif plans:
-        plans_text = "\n".join([f"{i+1}. {plan}" for i, plan in enumerate(plans)])
+        plans_text = "\n".join([f"{i+1}. {format_plan_line(plan)}" for i, plan in enumerate(plans)])
     else:
         plans_text = "Этот день пока без записей."
     
@@ -637,32 +721,17 @@ async def handle_review_action(update: Update, context: ContextTypes.DEFAULT_TYP
         day_index = context.user_data.get('day_index', 0)
         save_users(users)
         
-        # Проверяем, остались ли дни
-        if day_index < 6:
-            # Показываем дни от следующего до конца
-            remaining_days = [DAYS_SHORT[i] for i in range(day_index + 1, 7)]
-            
-            keyboard = [[day] for day in remaining_days]
-            keyboard.append(["✅ Готово"])
-            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-            
-            await update.message.reply_text(
-                f"✨ {current_day} готов. Какой день берём следующим?",
-                reply_markup=reply_markup
-            )
-            return CHOOSING_DAY
-        else:
-            # Все дни заполнены
-            users[user_id]['setup_complete'] = True
-            save_users(users)
-            
-            reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
-            await update.message.reply_text(
-                "🎉 Планы на неделю обновлены! Что дальше?",
-                reply_markup=reply_markup
-            )
-            await ensure_notification_time(update, context, users[user_id])
-            return MAIN_MENU
+        # После дня всегда показываем все дни + кнопки
+        keyboard = [[day] for day in DAYS_SHORT]
+        keyboard.append(["✅ Готово"])
+        keyboard.append(["🗑️ Удалить планы на день"])
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        await update.message.reply_text(
+            f"✨ {current_day} готов. Можно выбрать следующий день, нажать «✅ Готово» "
+            "или «🗑️ Удалить планы на день».",
+            reply_markup=reply_markup
+        )
+        return CHOOSING_DAY
     
     save_users(users)
     return REVIEW_PLANS
@@ -706,6 +775,36 @@ async def handle_time_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
     await update.message.reply_text("Главное меню:", reply_markup=reply_markup)
+    return MAIN_MENU
+
+TIMEZONES = [
+    "Asia/Irkutsk",
+    "Europe/Moscow",
+    "Europe/Kaliningrad",
+    "Asia/Yekaterinburg",
+    "Asia/Krasnoyarsk",
+    "Asia/Vladivostok",
+]
+
+async def timezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Выбор часового пояса"""
+    await cleanup_user_message(update)
+    user_id = str(update.effective_user.id)
+    users = load_users()
+    user = users.get(user_id)
+    
+    if not user:
+        await update.message.reply_text("Сначала запусти /start 😉")
+        return MAIN_MENU
+    
+    buttons = [[tz] for tz in TIMEZONES]
+    reply_markup = ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=True)
+    
+    await update.message.reply_text(
+        "Выбери свой часовой пояс (по названию региона):",
+        reply_markup=reply_markup,
+    )
+    context.user_data["choosing_timezone"] = True
     return MAIN_MENU
 
 # ========== ГЛОБАЛЬНЫЕ ПЛАНЫ ==========
@@ -839,7 +938,7 @@ async def send_daily_notification(user_id: str, application):
         
         if plans:
             message_lines.append("📋 Ежедневные задачи:")
-            message_lines.extend([f"• {plan}" for plan in plans])
+            message_lines.extend([f"• {format_plan_line(plan)}" for plan in plans])
         else:
             message_lines.append("📋 Ежедневные планы не записаны — можно добавить через /plan.")
         
@@ -897,7 +996,7 @@ async def send_daily_summary(user_id: str, application):
         
         if plans:
             lines.append("Вот что было в планах:")
-            lines.extend([f"• {plan}" for plan in plans])
+            lines.extend([f"• {format_plan_line(plan)}" for plan in plans])
         else:
             lines.append("Сегодня не было записанных задач — можно просто отметить настроение.")
         
@@ -931,7 +1030,22 @@ async def notification_scheduler(application):
                 if current_time == notification_time and user_data.get('setup_complete'):
                     await send_daily_notification(user_id, application)
                 
+                today_name = DAYS_OF_WEEK[user_now.weekday()]
+                day_plans = user_data.get('plans', {}).get(today_name, [])
                 today_key = user_now.strftime("%Y-%m-%d")
+                
+                for plan in day_plans:
+                    if isinstance(plan, dict) and plan.get("time") == current_time:
+                        sent_key = f"sent_{today_key}_{plan['time']}_{plan.get('text','')}"
+                        if not user_data.get(sent_key):
+                            await application.bot.send_message(
+                                chat_id=user_id,
+                                text=f"⏰ Сейчас {plan['time']} — {plan.get('text','')}"
+                            )
+                            user_data[sent_key] = True
+                            users[user_id] = user_data
+                            save_users(users)
+                
                 if (
                     current_time == SUMMARY_TIME
                     and user_data.get('setup_complete')
@@ -960,6 +1074,7 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
+    application.add_handler(CommandHandler("timezone", timezone_command))
     # ConversationHandler для управления потоком диалога
     conv_handler = ConversationHandler(
         entry_points=[
