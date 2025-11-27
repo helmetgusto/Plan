@@ -956,7 +956,7 @@ async def start_notification_scheduler(app: Application):
 def main():
     """Запуск бота"""
     # Введите ваш токен бота
-    TOKEN = "8148535799:AAEY3vyP8ipBh_jg6I4HVCN_Ge9PMQFPpDw"
+    TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     
     application = Application.builder().token(TOKEN).build()
     
