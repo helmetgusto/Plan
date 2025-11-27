@@ -79,11 +79,16 @@ async def prompt_notification_time(update: Update, context: ContextTypes.DEFAULT
     """Попросить указать время уведомлений"""
     context.user_data['waiting_for_time'] = True
     offset_label = get_timezone_offset_label(DEFAULT_TIMEZONE)
-    
-    await update.effective_chat.send_message(
+    users = load_users()
+    text = (
         f"⏰ Во сколько напоминать о планах? (ваш пояс: {offset_label})\n"
-        "Напиши время в формате ЧЧ:ММ, например 09:00.",
-        reply_markup=ReplyKeyboardRemove()
+        "Напиши время в формате ЧЧ:ММ, например 09:00."
+    )
+    await send_and_replace(
+        update,
+        users,
+        text,
+        ReplyKeyboardRemove(),
     )
 
 async def ensure_notification_time(update: Update, context: ContextTypes.DEFAULT_TYPE, user: dict) -> bool:
@@ -161,7 +166,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "вечером — мягко подвожу к подведению итогов.\n\n"
         "✨ Что я умею:\n"
         "• напомнить утром о планах и показать глобальные ориентиры;\n"
-        "• бережно провести через подведение итогов;\n"
+        "• бережно провести через подведение итогов командой /itog;\n"
         "• подсказать планы за любой день командой /day ДД.ММ.ГГГГ.\n\n"
         "⏰ Командой /plan можно обновить расписание в любой момент.\n"
         "💬 Необязательно заполнять все дни сразу — бери только то, что действительно важно.\n\n"
@@ -170,7 +175,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
     
-    await send_and_replace(update, users, welcome_text, reply_markup)
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
     await ensure_notification_time(update, context, user)
     return MAIN_MENU
 
@@ -307,11 +312,21 @@ def format_plan_line(plan) -> str:
 async def show_weekly_plans(update: Update, user: dict, users: dict):
     """Отправить пользователю планы на неделю"""
     if not user:
-        await send_and_replace(update, users, "Сначала запусти /start — так я узнаю твои планы 😉")
+        await send_and_replace(
+            update,
+            users,
+            "Сначала запусти /start — так я узнаю твои планы 😉",
+            ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True),
+        )
         return
     
     text = format_weekly_plans_text(user)
-    await send_and_replace(update, users, text)
+    await send_and_replace(
+        update,
+        users,
+        text,
+        ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True),
+    )
 
 def build_itog_list_text(day_name: str, date_text: str, plans: list, completed: set[int]) -> str:
     """Сформировать текст для списка планов при итогах"""
