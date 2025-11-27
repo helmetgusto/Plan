@@ -29,7 +29,7 @@ DEFAULT_TIMEZONE = "Asia/Irkutsk"
 SUMMARY_TIME = "23:59"
 MAIN_MENU_KEYBOARD = [
     ["📋 Настроить планы", "🌍 Глобальные планы"],
-    ["Мои планы"],
+    ["Мои планы", "🌐 Часовой пояс"],
 ]
 
 # Файлы для хранения данных
@@ -207,6 +207,8 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     elif update.message.text == "Мои планы":
         await show_weekly_plans(update, user)
         return MAIN_MENU
+    elif update.message.text == "🌐 Часовой пояс":
+        return await timezone_command(update, context)
     
     reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, resize_keyboard=True)
     await update.message.reply_text("Выбери, чем займёмся дальше:", reply_markup=reply_markup)
