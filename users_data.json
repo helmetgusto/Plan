@@ -1,0 +1,26 @@
+{
+  "865045389": {
+    "name": "Daniel",
+    "notification_time": "09:00",
+    "plans": {
+      "Понедельник": [],
+      "Вторник": [
+        "проверка итогов"
+      ],
+      "Среда": [
+        "проверить бота"
+      ],
+      "Четверг": [],
+      "Пятница": [],
+      "Суббота": [],
+      "Воскресенье": [
+        "привет"
+      ]
+    },
+    "setup_complete": true,
+    "last_message_id": null,
+    "timezone": "Europe/Moscow",
+    "last_summary_date": null,
+    "itog_state": null
+  }
+}
